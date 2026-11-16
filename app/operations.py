@@ -1,11 +1,11 @@
 """
 operations.py - Store operations: finding products, viewing stock and
-sales, receiving deliveries, logging waste, transferring stock, and
-maintaining the product catalog.
+sales, recording sales, receiving deliveries, logging waste, transferring
+stock, and maintaining the product catalog.
 
-Sales are not entered by hand: in a real store they come from the
-registers automatically. The app shows them (view_recent_sales) and uses
-them in reports.
+The system assumes sales are normally recorded automatically by the
+store's registers. record_sale is a manual backup (for example, when a
+register is down) that writes a sale the same way a register would.
 
 Every SQL statement that includes a user-supplied value uses ? placeholders.
 Operations that change several tables run inside "with conn:", which
@@ -24,6 +24,7 @@ from ui import (choose, print_table, prompt_date, prompt_int, prompt_money,
 CATEGORIES = ["Beverages", "Snacks", "Grab-and-Go", "Frozen",
               "Household", "Health & Beauty"]
 WASTE_REASONS = ["Expired", "Damaged", "Recalled", "Other"]
+PAYMENT_METHODS = ["Meal Swipe", "Dining Dollars", "Card"]
 
 
 def now_timestamp():
@@ -142,10 +143,11 @@ def _product_label(row, location_id, supplier_id):
     return label.rstrip()
 
 
-def collect_items(conn, location_id, action="remove"):
+def collect_items(conn, location_id, action="remove", check_item=None):
     """
     Build a list of (product_row, quantity) taken from stock at a location.
     Only products the location carries, with stock on hand, can be chosen.
+    check_item(product) may return a message to reject a product.
     """
     items = {}          # product_id -> [product_row, quantity]
     while True:
@@ -153,7 +155,10 @@ def collect_items(conn, location_id, action="remove"):
                                location_id, carried_only=True)
         already = items.get(product["product_id"], [None, 0])[1]
         available = product["quantity_on_hand"] - already
-        if available <= 0:
+        problem = check_item(product) if check_item else None
+        if problem:
+            print(f"  {problem}")
+        elif available <= 0:
             print(f"  There is no {product['name']} left in stock here.")
         else:
             qty = prompt_int(f"How many {product['name']}? (1-{available})",
@@ -311,7 +316,7 @@ def view_location_stock(conn):
 
 
 # ---------------------------------------------------------------------
-# 3. Recent sales at a location (related data; sales come from registers)
+# 3. Recent sales at a location (related data)
 # ---------------------------------------------------------------------
 
 def view_recent_sales(conn):
@@ -331,12 +336,63 @@ def view_recent_sales(conn):
            LIMIT ?""",
         (location_id, limit),
     ).fetchall()
-    print(f"\nMost recent sales at {location_name} (recorded by the registers):")
+    print(f"\nMost recent sales at {location_name}:")
     print_table(rows, empty_message="No sales recorded at this location.")
 
 
 # ---------------------------------------------------------------------
-# 4. Receive a delivery (transaction)
+# 4. Record a sale manually (transaction)
+# Sales normally come from the registers automatically; this is the
+# backup for when a register is down. It writes the sale exactly the way
+# a register would: the sale, its line items, and the stock decrease.
+# ---------------------------------------------------------------------
+
+def record_sale(conn):
+    print("\nSales are normally recorded by the registers automatically.")
+    print("Use this only to enter a sale by hand, such as when a register is down.")
+    location_id, location_name = pick_location(conn, "Where was the sale?")
+    employee_id = pick_employee(conn, location_id, "Cashier:")
+    payment = choose("Payment method:", [(m, m) for m in PAYMENT_METHODS])
+
+    def swipe_rule(product):
+        if payment == "Meal Swipe" and not product["meal_swipe_eligible"]:
+            return f"{product['name']} can't be paid for with a meal swipe."
+        return None
+
+    items = collect_items(conn, location_id, "sell", swipe_rule)
+
+    total = round(sum(p["unit_price"] * qty for p, qty in items), 2)
+    print(f"\nSale at {location_name} - {payment}")
+    for p, qty in items:
+        print(f"  {qty} x {p['name']} @ ${p['unit_price']:.2f}")
+    print(f"  Total: ${total:.2f}")
+    if not prompt_yes_no("Record this sale?", default=True):
+        print("Sale not recorded.")
+        return
+
+    sold_at = now_timestamp()
+    # The sale, its line items, and the stock decreases succeed or fail
+    # together, so inventory always matches recorded sales.
+    with conn:
+        sale_id = conn.execute(
+            """INSERT INTO sales_transactions
+                   (location_id, processed_by_employee_id, sold_at,
+                    payment_method, total_amount)
+               VALUES (?, ?, ?, ?, ?)""",
+            (location_id, employee_id, sold_at, payment, total),
+        ).lastrowid
+        for product, qty in items:
+            conn.execute(
+                """INSERT INTO sale_items (sale_id, product_id, quantity, unit_price)
+                   VALUES (?, ?, ?, ?)""",
+                (sale_id, product["product_id"], qty, product["unit_price"]),
+            )
+            _remove_stock(conn, location_id, product, qty, sold_at)
+    print(f"Sale #{sale_id} recorded. Stock at {location_name} updated.")
+
+
+# ---------------------------------------------------------------------
+# 5. Receive a delivery (transaction)
 # ---------------------------------------------------------------------
 
 def receive_delivery(conn):
@@ -412,7 +468,7 @@ def receive_delivery(conn):
 
 
 # ---------------------------------------------------------------------
-# 5. Log expired or damaged items (transaction)
+# 6. Log expired or damaged items (transaction)
 # ---------------------------------------------------------------------
 
 def log_waste(conn):
@@ -448,7 +504,7 @@ def log_waste(conn):
 
 
 # ---------------------------------------------------------------------
-# 6. Transfer stock between locations (transaction)
+# 7. Transfer stock between locations (transaction)
 # ---------------------------------------------------------------------
 
 def transfer_stock(conn):
@@ -488,7 +544,7 @@ def transfer_stock(conn):
 
 
 # ---------------------------------------------------------------------
-# 7. Add a new product (transaction when stocking locations)
+# 8. Add a new product (transaction when stocking locations)
 # ---------------------------------------------------------------------
 
 def _next_sku(conn, category):
@@ -555,7 +611,7 @@ def add_product(conn):
 
 
 # ---------------------------------------------------------------------
-# 8. Edit a product (UPDATE)
+# 9. Edit a product (UPDATE)
 # ---------------------------------------------------------------------
 
 def edit_product(conn):

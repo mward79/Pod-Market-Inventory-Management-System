@@ -23,6 +23,8 @@ MENU = [
     ("Find a product", operations.search_products),
     ("View stock at a location", operations.view_location_stock),
     ("View recent sales at a location", operations.view_recent_sales),
+    ("Record a sale manually (backup if a register is down)",
+     operations.record_sale),
     ("Receive a delivery", operations.receive_delivery),
     ("Log expired or damaged items", operations.log_waste),
     ("Transfer stock between locations", operations.transfer_stock),

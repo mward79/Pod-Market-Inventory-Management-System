@@ -22,13 +22,14 @@ how customers pay, and how much product is being wasted.
   catalog, and use reports to make reordering decisions.
 
 **Major functionality.** Finding products, stock and recent sales by
-location, receiving deliveries, logging waste, transferring stock, adding
+location, recording sales, receiving deliveries, logging waste, transferring stock, adding
 and editing products, and six reports (see
 [Major Application Operations](#major-application-operations)).
 
-Sales are not typed in by employees. In a real store they would come from
-the registers automatically (`transaction.sql` shows the SQL a register
-would run for one sale). The app displays sales and uses them in reports.
+The system assumes sales are recorded automatically by the store's
+registers (`transaction.sql` shows the SQL a register would run for one
+sale). The app displays sales, uses them in reports, and includes a manual
+"record a sale" option as a backup, for example when a register is down.
 
 Users never need to remember IDs or SKUs: they choose locations, people,
 suppliers, and products from numbered lists, and can narrow a product list
@@ -127,7 +128,7 @@ python app/main.py --db other.db    # use a different database file
 ```
 
 Choose operations by number. Type `q` at any prompt to cancel the current
-operation without saving anything. Choose **10 Exit** (or type `q` at the main
+operation without saving anything. Choose **11 Exit** (or type `q` at the main
 menu) to quit; the database connection is closed on exit.
 
 ## Major Application Operations
@@ -137,14 +138,15 @@ menu) to quit; the database connection is closed on exit.
 | 1 | **Find a product** - filter by part of the name, category, and status; pick a result by number to see its stock at every location and its suppliers | Search (`LIKE`, `LEFT JOIN`, `GROUP BY`); related data (joins across 5 tables) |
 | 2 | **View stock at a location**, optionally only low-stock items | Join of `location_inventory` and `products` |
 | 3 | **View recent sales at a location** - each sale with its cashier, payment method, and items | Join of `sales_transactions`, `employees`, `sale_items`, and `products` |
-| 4 | **Receive a delivery** - choose the supplier, then pick the products that arrived from that supplier's catalog, with quantities, costs, lot codes, and expiration dates | `INSERT` delivery and line items, `UPDATE` stock, in one transaction |
-| 5 | **Log expired or damaged items** | `INSERT` waste records, `UPDATE` stock, in one transaction |
-| 6 | **Transfer stock between locations** | `INSERT` transfer and items, `UPDATE` both locations' stock, in one transaction |
-| 7 | **Add a new product** and set it up at every location (the next SKU is suggested) | `INSERT` product and inventory rows, in one transaction |
-| 8 | **Edit a product** - price, cost, meal-swipe eligibility, active status, or a location's reorder level | `UPDATE` |
-| 9 | **Reports** (below) | Joins, aggregates, `GROUP BY`, views |
+| 4 | **Record a sale manually** - a backup for when a register is down: choose the store, cashier, and payment method, then pick the products sold; meal swipes only accept swipe-eligible products | `INSERT` sale and line items, `UPDATE` stock, in one transaction |
+| 5 | **Receive a delivery** - choose the supplier, then pick the products that arrived from that supplier's catalog, with quantities, costs, lot codes, and expiration dates | `INSERT` delivery and line items, `UPDATE` stock, in one transaction |
+| 6 | **Log expired or damaged items** | `INSERT` waste records, `UPDATE` stock, in one transaction |
+| 7 | **Transfer stock between locations** | `INSERT` transfer and items, `UPDATE` both locations' stock, in one transaction |
+| 8 | **Add a new product** and set it up at every location (the next SKU is suggested) | `INSERT` product and inventory rows, in one transaction |
+| 9 | **Edit a product** - price, cost, meal-swipe eligibility, active status, or a location's reorder level | `UPDATE` |
+| 10 | **Reports** (below) | Joins, aggregates, `GROUP BY`, views |
 
-Reports (menu 9):
+Reports (menu 10):
 1. **Reorder list** - items at or below reorder level, grouped by the cheapest
    active supplier (`v_low_stock` view)
 2. **Items expiring soon** - delivered lots expiring within N days
@@ -155,13 +157,13 @@ Reports (menu 9):
 6. **Spending with each supplier** (`v_delivery_summary` view)
 
 **Mapping to the required operation types:** search = 1; related data = 1
-(product details), 2, and 3; add = 4 and 7; update = 8; report = 9;
-additional = 5 and 6.
+(product details), 2, and 3; add = 4, 5, and 8; update = 9; report = 10;
+additional = 6 and 7.
 
 **Safety and validation.** Every SQL statement with user input uses `?`
 placeholders. Input is validated (menu numbers, quantities, prices, dates,
-duplicate SKUs and invoice numbers, stock available, expiration dates that
-have already passed, a transfer to the same location). Database errors are shown as short
+duplicate SKUs and invoice numbers, stock available, meal-swipe eligibility,
+expiration dates that have already passed, a transfer to the same location). Database errors are shown as short
 messages instead of raw errors. Multi-table changes run inside a
 transaction, so a failure rolls back the whole operation.
 
@@ -205,9 +207,10 @@ The app's own screens also read from the database each time, so option 2
   October 21-22, so in the sample data it is not exactly deliveries minus
   sales, waste, and transfers. Changes made through the app keep it
   consistent from then on.
-- **Sales come from outside the app.** The app has no register screen; it
-  assumes sales are written by the store's registers. Without that
-  connection, new sales appear only through SQL (see `transaction.sql`).
+- **Sales are assumed to come from the registers.** The system is designed
+  for sales to be recorded automatically by the store's registers, but this
+  project has no connection to real registers. The manual "Record a sale"
+  option stands in for them and writes sales the same way a register would.
 - **Supplier catalogs** are in the database but are not edited through the
   app. Transfers made in the app are completed immediately; the Requested
   and In Transit statuses appear only in the sample data.
